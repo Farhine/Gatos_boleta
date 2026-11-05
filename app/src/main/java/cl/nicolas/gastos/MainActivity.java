@@ -3,9 +3,11 @@ import android.app.Activity;import android.content.ClipData;import android.conte
 import android.graphics.Bitmap;import android.graphics.BitmapFactory;import android.graphics.Rect;import android.util.Base64;
 import com.google.mlkit.vision.common.InputImage;import com.google.mlkit.vision.text.Text;import com.google.mlkit.vision.text.TextRecognition;import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 import org.json.JSONArray;import org.json.JSONException;import org.json.JSONObject;
+import android.Manifest;import android.content.pm.PackageManager;import android.hardware.biometrics.BiometricManager;import android.hardware.biometrics.BiometricPrompt;import android.os.Build;import android.os.CancellationSignal;import android.view.View;
+import com.google.android.gms.location.LocationServices;import com.google.android.gms.location.Priority;
 import java.io.File;import java.io.FileOutputStream;import java.io.IOException;import java.io.InputStream;import java.nio.charset.StandardCharsets;
 public class MainActivity extends Activity{
-  private static final int PICK=1;private static final String BASE="https://boleta.local/";
+  private static final int PICK=1,BK=2;private static final String BASE="https://boleta.local/";
   private WebView web;private ValueCallback<Uri[]> cb;private Uri photo;
   @Override protected void onCreate(Bundle b){
     super.onCreate(b);
@@ -35,14 +37,37 @@ public class MainActivity extends Activity{
           startActivityForResult(i,PICK);return true;
         }catch(Exception e){cb=null;return false;}
       }});
-    if(b!=null)web.restoreState(b);else web.loadUrl(BASE);
+    if(b!=null)web.restoreState(b);else web.loadUrl(BASE+(getIntent().getBooleanExtra("nuevo",false)?"?nuevo=1":""));
+    Native.schedule(this);Native.geofences(this);
   }
   @Override protected void onActivityResult(int q,int r,Intent d){
+    if(q==BK){
+      if(r==RESULT_OK&&d!=null&&d.getData()!=null){
+        Uri u=d.getData();
+        try{getContentResolver().takePersistableUriPermission(u,Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);}catch(RuntimeException ignored){}
+        getSharedPreferences("b",MODE_PRIVATE).edit().putString("uri",u.toString()).apply();
+        web.evaluateJavascript("onBackupPicked()",null);
+      }
+      return;
+    }
     if(q!=PICK||cb==null)return;
     Uri[] out=null;
     if(r==RESULT_OK)out=photo!=null?new Uri[]{photo}:WebChromeClient.FileChooserParams.parseResult(r,d);
     cb.onReceiveValue(out);cb=null;
   }
+  private boolean away=true;
+  private boolean locked(){try{return new org.json.JSONObject(Native.prefs(this).getString("sync","{}")).optBoolean("lock");}catch(Exception e){return false;}}
+  @Override protected void onStart(){
+    super.onStart();
+    if(!away||!locked()||Build.VERSION.SDK_INT<30){away=false;return;}
+    web.setVisibility(View.INVISIBLE);
+    new BiometricPrompt.Builder(this).setTitle("Boleta").setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK|BiometricManager.Authenticators.DEVICE_CREDENTIAL).build()
+      .authenticate(new CancellationSignal(),getMainExecutor(),new BiometricPrompt.AuthenticationCallback(){
+        @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult r){away=false;web.setVisibility(View.VISIBLE);}
+        @Override public void onAuthenticationError(int c,CharSequence s){finish();}
+      });
+  }
+  @Override protected void onStop(){super.onStop();if(cb==null)away=true;}
   @Override protected void onSaveInstanceState(Bundle b){super.onSaveInstanceState(b);web.saveState(b);}
   @JavascriptInterface public void readReceipt(String dataUrl){
     try{
@@ -63,12 +88,48 @@ public class MainActivity extends Activity{
     }catch(RuntimeException e){ocrDone("[]","true");}
   }
   private void ocrDone(String json,String err){runOnUiThread(()->web.evaluateJavascript("onOcr("+json+","+err+")",null));}
+  @JavascriptInterface public boolean hasBackup(){return getSharedPreferences("b",MODE_PRIVATE).contains("uri");}
+  @JavascriptInterface public void pickBackup(){
+    Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE,"boleta-respaldo.json");
+    i.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION|Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+    startActivityForResult(i,BK);
+  }
+  @JavascriptInterface public boolean writeBackup(String t){
+    String u=getSharedPreferences("b",MODE_PRIVATE).getString("uri",null);if(u==null)return false;
+    try(java.io.OutputStream o=getContentResolver().openOutputStream(Uri.parse(u),"wt")){o.write(t.getBytes(StandardCharsets.UTF_8));return true;}catch(Exception e){return false;}
+  }
+  @JavascriptInterface public void openUrl(String u){startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(u)));}
+  @JavascriptInterface public void sync(String json){
+    Native.prefs(this).edit().putString("sync",json).apply();BoletaWidget.refresh(this);Native.geofences(this);
+  }
+  @JavascriptInterface public void shareText(String t){startActivity(Intent.createChooser(new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,t),"Compartir"));}
+  @JavascriptInterface public void askNotifications(){if(Build.VERSION.SDK_INT>=33)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},3);}
+  private String pendingPlace;
+  @JavascriptInterface public void addPlace(String name){
+    pendingPlace=name;
+    if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION},4);return;}
+    locate();
+  }
+  private void locate(){
+    try{
+      LocationServices.getFusedLocationProviderClient(this).getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY,null)
+        .addOnSuccessListener(l->{String n=org.json.JSONObject.quote(pendingPlace);web.evaluateJavascript(l==null?"onPlace(null)":"onPlace("+n+","+l.getLatitude()+","+l.getLongitude()+")",null);})
+        .addOnFailureListener(e->web.evaluateJavascript("onPlace(null)",null));
+    }catch(SecurityException e){web.evaluateJavascript("onPlace(null)",null);}
+    if(checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)!=PackageManager.PERMISSION_GRANTED)web.evaluateJavascript("onNeedAlways()",null);
+  }
+  @JavascriptInterface public void askAlways(){runOnUiThread(()->requestPermissions(new String[]{Manifest.permission.ACCESS_BACKGROUND_LOCATION},5));}
+  @Override public void onRequestPermissionsResult(int q,String[] p,int[] r){
+    if(q==4&&r.length>0&&r[0]==PackageManager.PERMISSION_GRANTED)locate();
+    else if(q==4)web.evaluateJavascript("onPlace(null)",null);
+    if(q==5)Native.geofences(this);
+  }
   @JavascriptInterface public void shareFile(String name,String text){
     try{
       File f=new File(getCacheDir(),new File(name).getName());
       try(FileOutputStream o=new FileOutputStream(f)){o.write(text.getBytes(StandardCharsets.UTF_8));}
-      Intent i=new Intent(Intent.ACTION_SEND).setType("application/json").putExtra(Intent.EXTRA_STREAM,CacheProvider.uri(f)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-      startActivity(Intent.createChooser(i,"Guardar respaldo"));
+      Intent i=new Intent(Intent.ACTION_SEND).setType(name.endsWith(".csv")?"text/csv":"application/json").putExtra(Intent.EXTRA_STREAM,CacheProvider.uri(f)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      startActivity(Intent.createChooser(i,"Guardar o compartir"));
     }catch(IOException ignored){}
   }
   @Override public void onBackPressed(){

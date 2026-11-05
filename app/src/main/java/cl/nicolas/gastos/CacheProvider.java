@@ -11,7 +11,7 @@ public class CacheProvider extends ContentProvider{
     return ParcelFileDescriptor.open(file(u),ParcelFileDescriptor.parseMode(mode.isEmpty()?"r":mode));}
   @Override public Cursor query(Uri u,String[] p,String s,String[] a,String o){
     File f=file(u);MatrixCursor c=new MatrixCursor(new String[]{OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE});c.addRow(new Object[]{f.getName(),f.length()});return c;}
-  @Override public String getType(Uri u){return u.getLastPathSegment().endsWith(".json")?"application/json":"image/jpeg";}
+  @Override public String getType(Uri u){String n=u.getLastPathSegment();return n.endsWith(".json")?"application/json":n.endsWith(".csv")?"text/csv":"image/jpeg";}
   @Override public Uri insert(Uri u,ContentValues v){return null;}
   @Override public int delete(Uri u,String s,String[] a){return 0;}
   @Override public int update(Uri u,ContentValues v,String s,String[] a){return 0;}
