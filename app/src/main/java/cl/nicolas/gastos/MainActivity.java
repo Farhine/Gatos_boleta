@@ -156,9 +156,6 @@ public class MainActivity extends Activity{
       return true;
     }catch(IOException|org.json.JSONException|RuntimeException e){return false;}
   }
-  @JavascriptInterface public boolean notifAccess(){String s=android.provider.Settings.Secure.getString(getContentResolver(),"enabled_notification_listeners");return s!=null&&s.contains(getPackageName());}
-  @JavascriptInterface public void openNotifAccess(){startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));}
-  @JavascriptInterface public String takeInbox(){synchronized(BankListener.class){String s=Native.prefs(this).getString("inbox","[]");Native.prefs(this).edit().remove("inbox").apply();return s;}}
   @Override protected void onResume(){super.onResume();web.evaluateJavascript("window.onApp&&onApp()",null);}
   @JavascriptInterface public void shareFile(String name,String text){
     try{
