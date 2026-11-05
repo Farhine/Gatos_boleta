@@ -57,19 +57,22 @@ public class MainActivity extends Activity{
     if(r==RESULT_OK)out=photo!=null?new Uri[]{photo}:WebChromeClient.FileChooserParams.parseResult(r,d);
     cb.onReceiveValue(out);cb=null;
   }
-  private boolean away=true;
+  private static final long LOCK_MS=20*60*1000;private boolean unlocked=false;private long left=0;
   private boolean locked(){try{return new org.json.JSONObject(Native.prefs(this).getString("sync","{}")).optBoolean("lock");}catch(Exception e){return false;}}
   @Override protected void onStart(){
     super.onStart();
-    if(!away||!locked()||Build.VERSION.SDK_INT<30){away=false;return;}
+    long now=android.os.SystemClock.elapsedRealtime();
+    if(!locked()||Build.VERSION.SDK_INT<30){unlocked=true;left=now;return;}
+    if(unlocked&&(cb!=null||now-left<LOCK_MS))return;
+    unlocked=false;
     web.setVisibility(View.INVISIBLE);
     new BiometricPrompt.Builder(this).setTitle("Boleta").setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK|BiometricManager.Authenticators.DEVICE_CREDENTIAL).build()
       .authenticate(new CancellationSignal(),getMainExecutor(),new BiometricPrompt.AuthenticationCallback(){
-        @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult r){away=false;web.setVisibility(View.VISIBLE);}
+        @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult r){unlocked=true;left=android.os.SystemClock.elapsedRealtime();web.setVisibility(View.VISIBLE);}
         @Override public void onAuthenticationError(int c,CharSequence s){finish();}
       });
   }
-  @Override protected void onStop(){super.onStop();if(cb==null)away=true;}
+  @Override protected void onStop(){super.onStop();if(unlocked&&cb==null)left=android.os.SystemClock.elapsedRealtime();}
   @Override protected void onSaveInstanceState(Bundle b){super.onSaveInstanceState(b);web.saveState(b);}
   @JavascriptInterface public void readReceipt(String dataUrl){
     try{
@@ -131,6 +134,32 @@ public class MainActivity extends Activity{
     else if(q==4)web.evaluateJavascript("onPlace(null)",null);
     if(q==5)Native.geofences(this);
   }
+  private File stage(String name,String dataUrl) throws IOException{
+    File f=new File(getCacheDir(),"doc-"+name.replaceAll("[^A-Za-z0-9._-]","_"));
+    try(FileOutputStream o=new FileOutputStream(f)){o.write(Base64.decode(dataUrl.substring(dataUrl.indexOf(',')+1),Base64.DEFAULT));}
+    return f;
+  }
+  @JavascriptInterface public boolean openDoc(String name,String dataUrl){
+    try{
+      Uri u=CacheProvider.uri(stage(name,dataUrl));
+      startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(u,name.toLowerCase().endsWith(".pdf")?"application/pdf":"image/jpeg").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+      return true;
+    }catch(IOException|RuntimeException e){return false;}
+  }
+  @JavascriptInterface public boolean shareDocs(String json){
+    try{
+      org.json.JSONArray a=new org.json.JSONArray(json);
+      java.util.ArrayList<Uri> l=new java.util.ArrayList<>();
+      for(int i=0;i<a.length();i++){org.json.JSONObject o=a.getJSONObject(i);l.add(CacheProvider.uri(stage(o.getString("name"),o.getString("data"))));}
+      Intent s=new Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*").putParcelableArrayListExtra(Intent.EXTRA_STREAM,l).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+      startActivity(Intent.createChooser(s,"Enviar documentos"));
+      return true;
+    }catch(IOException|org.json.JSONException|RuntimeException e){return false;}
+  }
+  @JavascriptInterface public boolean notifAccess(){String s=android.provider.Settings.Secure.getString(getContentResolver(),"enabled_notification_listeners");return s!=null&&s.contains(getPackageName());}
+  @JavascriptInterface public void openNotifAccess(){startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));}
+  @JavascriptInterface public String takeInbox(){synchronized(BankListener.class){String s=Native.prefs(this).getString("inbox","[]");Native.prefs(this).edit().remove("inbox").apply();return s;}}
+  @Override protected void onResume(){super.onResume();web.evaluateJavascript("window.onApp&&onApp()",null);}
   @JavascriptInterface public void shareFile(String name,String text){
     try{
       File f=new File(getCacheDir(),new File(name).getName());
