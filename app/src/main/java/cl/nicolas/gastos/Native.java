@@ -30,7 +30,7 @@ final class Native{
       List<Geofence> l=new ArrayList<>();
       for(int i=0;i<a.length()&&i<90;i++){JSONObject o=a.getJSONObject(i);
         l.add(new Geofence.Builder().setRequestId(o.getString("name")).setCircularRegion(o.getDouble("lat"),o.getDouble("lng"),120f).setExpirationDuration(Geofence.NEVER_EXPIRE).setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER).build());}
-      g.addGeofences(new GeofencingRequest.Builder().setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER).addGeofences(l).build(),p);
+      g.addGeofences(new GeofencingRequest.Builder().setInitialTrigger(0).addGeofences(l).build(),p);
     }catch(JSONException|SecurityException ignored){}
   }
 }

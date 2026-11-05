@@ -11,7 +11,9 @@ public class MainActivity extends Activity{
   private WebView web;private ValueCallback<Uri[]> cb;private Uri photo;
   @Override protected void onCreate(Bundle b){
     super.onCreate(b);
-    web=new WebView(this);setContentView(web);
+    web=new WebView(this);
+    boolean night=(getResources().getConfiguration().uiMode&android.content.res.Configuration.UI_MODE_NIGHT_MASK)==android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    web.setBackgroundColor(night?0xFF0F1413:0xFFF4F6F5);setContentView(web);
     WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);
     web.addJavascriptInterface(this,"Android");
     web.setWebViewClient(new WebViewClient(){
@@ -100,15 +102,20 @@ public class MainActivity extends Activity{
   }
   @JavascriptInterface public void openUrl(String u){startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(u)));}
   @JavascriptInterface public void sync(String json){
-    Native.prefs(this).edit().putString("sync",json).apply();BoletaWidget.refresh(this);Native.geofences(this);
+    String old=Native.prefs(this).getString("sync","{}");
+    Native.prefs(this).edit().putString("sync",json).apply();BoletaWidget.refresh(this);
+    if(!places(old).equals(places(json)))Native.geofences(this);
   }
+  private String places(String s){try{return String.valueOf(new org.json.JSONObject(s).optJSONArray("places"));}catch(Exception e){return "";}}
   @JavascriptInterface public void shareText(String t){startActivity(Intent.createChooser(new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,t),"Compartir"));}
   @JavascriptInterface public void askNotifications(){if(Build.VERSION.SDK_INT>=33)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},3);}
   private String pendingPlace;
   @JavascriptInterface public void addPlace(String name){
-    pendingPlace=name;
-    if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION},4);return;}
-    locate();
+    runOnUiThread(()->{
+      pendingPlace=name;
+      if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION},4);
+      else locate();
+    });
   }
   private void locate(){
     try{
